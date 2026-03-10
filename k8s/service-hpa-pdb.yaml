@@ -1,0 +1,97 @@
+---
+# ── Service ───────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: webapp
+  namespace: production
+spec:
+  selector:
+    app: webapp
+  ports:
+    - port: 80
+      targetPort: 8000
+      name: http
+
+---
+# ── Horizontal Pod Autoscaler ────────────────────────────
+# Scale between 3 and 20 replicas based on CPU + memory
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: webapp-hpa
+  namespace: production
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: webapp
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+
+---
+# ── Pod Disruption Budget ────────────────────────────────
+# Guarantee at least 2 pods during node maintenance / rollouts
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: webapp-pdb
+  namespace: production
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: webapp
+
+---
+# ── ConfigMap ─────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webapp-config
+  namespace: production
+data:
+  LOG_LEVEL: "INFO"
+  ENVIRONMENT: "production"
+  ENABLE_METRICS: "true"
+
+---
+# ── Ingress (nginx-ingress controller) ───────────────────
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: webapp-ingress
+  namespace: production
+  annotations:
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.example.com
+      secretName: webapp-tls
+  rules:
+    - host: api.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: webapp
+                port:
+                  number: 80
