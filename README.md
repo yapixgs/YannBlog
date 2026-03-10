@@ -1,58 +1,119 @@
-# 🚀 Python Web App — Production Template
+# 🚀 YannBlog — FastAPI + Docker
 
-Stack production-grade : **FastAPI** · **Gunicorn/Uvicorn** · **PostgreSQL** · **Redis** · **Docker** · **Kubernetes**
+Stack : **FastAPI** · **Gunicorn/Uvicorn** · **PostgreSQL** · **Redis** · **Docker** · **Nginx**
 
 ---
 
 ## Architecture
 
 ```
-webapp/
+YannBlog/
 ├── app/
-│   ├── main.py               # Point d'entrée FastAPI (lifespan, middlewares, routes)
+│   ├── main.py                        # Point d'entrée FastAPI
 │   ├── core/
-│   │   ├── config.py         # Config centralisée via pydantic-settings + .env
-│   │   └── logging.py        # Logs structurés JSON (Datadog / Loki / ELK)
-│   └── api/
-│       ├── router.py         # Agrégation des routers
-│       └── endpoints/
-│           ├── users.py      # Exemple d'endpoint CRUD
-│           ├── items.py
-│           └── metrics.py    # Endpoint Prometheus /metrics
+│   │   ├── config.py                  # Config via pydantic-settings + .env
+│   │   ├── logging.py                 # Logs structurés JSON
+│   │   └── sessions.py                # Gestion des sessions
+│   ├── api/
+│   │   ├── router.py                  # Agrégation des routers
+│   │   └── endpoints/
+│   │       ├── auth.py                # Auth WebAuthn (YubiKey)
+│   │       ├── posts.py               # CRUD articles
+│   │       ├── comments.py            # Commentaires
+│   │       ├── users.py               # Utilisateurs
+│   │       └── metrics.py             # Prometheus /metrics
+│   ├── models/
+│   │   └── db.py                      # Modèles SQLAlchemy + PostgreSQL async
+│   ├── services/
+│   │   └── webauthn_service.py        # Service WebAuthn / FIDO2
+│   └── static/
+│       └── index.html                 # Frontend
 ├── k8s/
-│   ├── deployment.yaml       # Deployment + probes + security context
-│   └── service-hpa-pdb.yaml  # Service, HPA, PDB, ConfigMap, Ingress
+│   ├── deployment.yaml
+│   └── service-hpa-pdb.yaml
 ├── nginx/
-│   └── nginx.conf            # Reverse proxy, rate limiting, logs JSON
-├── Dockerfile                # Multi-stage build (builder + runtime minimal)
-├── docker-compose.yml        # Stack locale : app + postgres + redis + nginx
+│   └── nginx.conf                     # Reverse proxy, rate limiting
+├── Dockerfile                         # Multi-stage build
+├── docker-compose.yml                 # Stack complète locale
 ├── requirements.txt
-├── Makefile                  # Commandes dev/deploy
-└── .env.example
+├── Makefile
+└── blog.db                            # SQLite (dev local uniquement)
 ```
 
 ---
 
-## Démarrage rapide
+## Démarrage avec Docker (recommandé)
 
-### Local (dev)
 ```bash
-cp .env.example .env
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-make dev
+# Lancer toute la stack (app + postgres + redis + nginx)
+docker compose build && docker compose up -d
+
+# Voir les logs de l'app
+docker compose logs -f app
+
+# Arrêter proprement (données conservées)
+docker compose down
+```
+
+> ⚠️ Ne pas utiliser `make up` — le Makefile utilise `--keepalive` qui est invalide.
+> Utiliser `docker compose build && docker compose up -d` à la place.
+
+L'app est accessible sur **http://localhost**
+
+---
+
+## Corrections appliquées
+
+| Problème | Correction |
+|----------|------------|
+| `--keepalive 5` invalide dans Dockerfile | Remplacé par `--keep-alive 5` |
+| `asyncpg` manquant dans requirements.txt | Ajouté `asyncpg==0.29.0` |
+| `docker compose` plugin manquant | Installer via `sudo pacman -S docker-compose` |
+
+---
+
+## Développement local (sans Docker)
+
+```bash
+source .venv/bin/activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 # → http://localhost:8000/docs
 ```
 
-### Docker Compose (staging / démo)
+---
+
+## Variables d'environnement clés
+
+| Variable | Défaut | Description |
+|----------|--------|-------------|
+| `ENVIRONMENT` | `production` | `development` \| `staging` \| `production` |
+| `WORKERS` | `4` | Nombre de workers Gunicorn |
+| `DATABASE_URL` | — | URL PostgreSQL async (`postgresql+asyncpg://...`) |
+| `REDIS_URL` | — | URL Redis |
+| `LOG_LEVEL` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` |
+| `SECRET_KEY` | — | Clé secrète JWT / sessions |
+
+---
+
+## SSH avec YubiKey (GPG Agent)
+
+La clé SSH est gérée par `gpg-agent`. Configuration dans `~/.bashrc` / `~/.zshrc` :
+
 ```bash
-make up
-# → http://localhost/api/v1/users
-make logs
-make down
+export GPG_TTY=$(tty)
+export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
 ```
 
-### Kubernetes (production)
+Vérifier que la YubiKey est détectée :
+
+```bash
+ssh-add -L
+```
+
+---
+
+## Kubernetes (production)
+
 ```bash
 # 1. Construire et pousser l'image
 make push TAG=1.0.0
@@ -68,51 +129,3 @@ kubectl create secret generic webapp-secrets \
 make k8s-apply
 make k8s-status
 ```
-
----
-
-## Points clés de stabilité
-
-| Couche | Mécanisme |
-|--------|-----------|
-| **Zero-downtime deploys** | `RollingUpdate` + `maxUnavailable: 0` |
-| **Auto-scaling** | HPA CPU 70% / Mémoire 80% → 3–20 pods |
-| **Résilience** | PodDisruptionBudget `minAvailable: 2` |
-| **Health checks** | `/healthz` (liveness) + `/readyz` (readiness) |
-| **Sécurité** | Non-root, `readOnlyRootFilesystem`, `drop ALL` capabilities |
-| **Observabilité** | Logs JSON + Prometheus `/metrics` |
-| **Rate limiting** | Nginx (30 req/s) + Kubernetes Ingress |
-| **Workers** | Gunicorn multi-process + Uvicorn async workers |
-
----
-
-## Ajouter un endpoint
-
-```python
-# app/api/endpoints/products.py
-from fastapi import APIRouter
-router = APIRouter()
-
-@router.get("/")
-async def list_products():
-    return [{"id": 1, "name": "Widget"}]
-```
-
-```python
-# app/api/router.py  — ajouter :
-from app.api.endpoints import products
-api_router.include_router(products.router, prefix="/products", tags=["products"])
-```
-
----
-
-## Variables d'environnement clés
-
-| Variable | Défaut | Description |
-|----------|--------|-------------|
-| `ENVIRONMENT` | `production` | `development` \| `staging` \| `production` |
-| `WORKERS` | `4` | Nombre de workers Gunicorn |
-| `DATABASE_URL` | — | URL PostgreSQL async |
-| `REDIS_URL` | — | URL Redis |
-| `LOG_LEVEL` | `INFO` | `DEBUG` \| `INFO` \| `WARNING` |
-| `SECRET_KEY` | — | Clé secrète JWT / sessions |
