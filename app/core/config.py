@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # Changez cette valeur dans .env avant de déployer !
     ADMIN_KEY: str = "changez-moi-clé-admin-secrète"
 
+    # Google OAuth (optionnel — laisser vide pour désactiver)
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_REDIRECT_URI: str = "http://localhost:8000/api/v1/auth/google/callback"
+
     LOG_LEVEL: str = "INFO"
 
 

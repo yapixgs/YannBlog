@@ -30,11 +30,13 @@ class User(Base):
     display_name  = Column(String(120), nullable=False)
     email         = Column(String(200), unique=True, nullable=True)
     password_hash = Column(String(256), nullable=True)   # None = YubiKey only
+    google_id     = Column(String(200), unique=True, nullable=True)  # Google OAuth
     is_admin      = Column(Boolean, default=False)
     created_at    = Column(DateTime, default=datetime.utcnow)
 
     credentials = relationship("WebAuthnCredential", back_populates="user", cascade="all, delete-orphan")
     posts       = relationship("Post", back_populates="author", cascade="all, delete-orphan")
+    likes       = relationship("Like", back_populates="user", cascade="all, delete-orphan")
 
 
 # ── WebAuthn Credential (YubiKey / passkey) ───────────────
@@ -77,6 +79,7 @@ class Post(Base):
 
     author   = relationship("User", back_populates="posts")
     comments = relationship("Comment", back_populates="post", cascade="all, delete-orphan")
+    likes    = relationship("Like", back_populates="post", cascade="all, delete-orphan")
 
     @property
     def tags_list(self):
@@ -94,6 +97,19 @@ class Comment(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     post = relationship("Post", back_populates="comments")
+
+
+# ── Like ──────────────────────────────────────────────────
+class Like(Base):
+    __tablename__ = "likes"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    post_id    = Column(Integer, ForeignKey("posts.id"), nullable=False)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    post = relationship("Post", back_populates="likes")
+    user = relationship("User", back_populates="likes")
 
 
 # ── WebAuthn challenge store (in-memory / Redis in prod) ──

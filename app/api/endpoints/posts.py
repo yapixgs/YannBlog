@@ -11,12 +11,12 @@ from typing import List, Optional
 import re
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+from sqlalchemy import select, desc, func
 
-from app.models.db import get_db, Post, User
+from app.models.db import get_db, Post, User, Like
 from app.core.sessions import get_session
 
 router = APIRouter()
@@ -70,7 +70,7 @@ class PostOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
-def post_to_dict(post: Post) -> dict:
+def post_to_dict(post: Post, likes_count: int = 0) -> dict:
     return {
         "slug": post.slug,
         "title": post.title,
@@ -82,13 +82,19 @@ def post_to_dict(post: Post) -> dict:
         "created_at": post.created_at.isoformat(),
         "updated_at": post.updated_at.isoformat(),
         "author_username": post.author.username if post.author else "",
+        "likes_count": likes_count,
     }
 
 
 # ── Endpoints ─────────────────────────────────────────────
 
 @router.get("/")
-async def list_posts(request: Request, db: AsyncSession = Depends(get_db)):
+async def list_posts(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    q: Optional[str] = Query(None, description="Recherche dans titre/résumé/contenu"),
+    tag: Optional[str] = Query(None, description="Filtrer par tag"),
+):
     sess = get_session(request)
     is_admin = False
     if sess:
@@ -102,10 +108,33 @@ async def list_posts(request: Request, db: AsyncSession = Depends(get_db)):
 
     result = await db.execute(query)
     posts = result.scalars().all()
+
     # Eager-load authors
     for p in posts:
         await db.refresh(p, ["author"])
-    return [post_to_dict(p) for p in posts]
+
+    # Filter by tag
+    if tag:
+        tag_lower = tag.lower().strip()
+        posts = [p for p in posts if tag_lower in [t.lower() for t in json.loads(p.tags or "[]")]]
+
+    # Filter by search query
+    if q:
+        q_lower = q.lower().strip()
+        posts = [
+            p for p in posts
+            if q_lower in p.title.lower()
+            or q_lower in (p.summary or "").lower()
+            or q_lower in p.content.lower()
+        ]
+
+    # Get likes counts
+    result_likes = await db.execute(
+        select(Like.post_id, func.count(Like.id).label("cnt")).group_by(Like.post_id)
+    )
+    likes_map = {row.post_id: row.cnt for row in result_likes}
+
+    return [post_to_dict(p, likes_map.get(p.id, 0)) for p in posts]
 
 
 @router.get("/{slug}")
@@ -125,7 +154,10 @@ async def get_post(slug: str, request: Request, db: AsyncSession = Depends(get_d
             raise HTTPException(status_code=404)
 
     await db.refresh(post, ["author"])
-    return post_to_dict(post)
+    count_result = await db.execute(
+        select(func.count()).select_from(Like).where(Like.post_id == post.id)
+    )
+    return post_to_dict(post, count_result.scalar())
 
 
 @router.post("/", status_code=201)
